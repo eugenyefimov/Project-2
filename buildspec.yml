@@ -4,31 +4,48 @@ phases:
   install:
     runtime-versions:
       nodejs: 18
+      python: 3.9
     commands:
       - echo Installing dependencies...
-      - npm install
+      - npm install --production=false
       - pip install --upgrade aws-sam-cli
+      - pip install --upgrade cfn-lint
   
   pre_build:
     commands:
-      - echo Running tests...
+      - echo Running tests and linting...
       - npm test
+      - echo Validating CloudFormation templates...
+      - cfn-lint template.yaml
+      - sam validate
   
   build:
     commands:
       - echo Building the SAM application...
-      - sam build
+      - sam build --parallel
   
   post_build:
     commands:
       - echo Packaging the SAM application...
       - sam package --s3-bucket $ARTIFACT_BUCKET --output-template-file packaged.yaml
+      - echo Build completed on `date`
 
 artifacts:
   files:
     - packaged.yaml
     - template.yaml
+    - README.md
+    - appspec.yml
+  discard-paths: no
 
 cache:
   paths:
     - 'node_modules/**/*'
+    - '/root/.cache/pip/**/*'
+
+reports:
+  jest_reports:
+    files:
+      - 'test-report.xml'
+    file-format: JUNITXML
+    base-directory: './reports'

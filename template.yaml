@@ -2,21 +2,60 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Serverless Task Management API
 
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Deployment environment
+
+Globals:
+  Function:
+    Runtime: nodejs18.x
+    Architectures:
+      - x86_64
+    MemorySize: 128
+    Timeout: 30
+    Tracing: Active
+    Environment:
+      Variables:
+        TASKS_TABLE: !Ref TasksTable
+        ENVIRONMENT: !Ref Environment
+    Tags:
+      Environment: !Ref Environment
+      Application: TaskManager
+
 Resources:
   # DynamoDB Table
   TasksTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: Tasks
+      TableName: !Sub Tasks-${Environment}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: id
           AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
       KeySchema:
         - AttributeName: id
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserIdIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
 
   # Lambda Functions
   GetTasksFunction:
@@ -24,14 +63,6 @@ Resources:
     Properties:
       CodeUri: src/
       Handler: getTasks.handler
-      Runtime: nodejs18.x
-      Architectures:
-        - x86_64
-      MemorySize: 128
-      Timeout: 30
-      Environment:
-        Variables:
-          TASKS_TABLE: !Ref TasksTable
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref TasksTable
@@ -41,7 +72,8 @@ Resources:
           Properties:
             Path: /tasks
             Method: get
-      Tracing: Active
+            Auth:
+              ApiKeyRequired: true
 
   GetTaskFunction:
     Type: AWS::Serverless::Function
@@ -139,11 +171,94 @@ Resources:
             Method: delete
       Tracing: Active
 
+  # API Gateway
+  ApiGatewayApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub TaskManagerApiKey-${Environment}
+      Description: API Key for Task Manager API
+      Enabled: true
+
+  ApiGatewayUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      UsagePlanName: !Sub TaskManagerUsagePlan-${Environment}
+      Description: Usage plan for Task Manager API
+      ApiStages:
+        - ApiId: !Ref ServerlessRestApi
+          Stage: Prod
+      Throttle:
+        RateLimit: 100
+        BurstLimit: 200
+      Quota:
+        Limit: 10000
+        Period: MONTH
+
+  ApiGatewayUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiGatewayApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiGatewayUsagePlan
+
+  # CloudWatch Dashboard
+  TaskManagerDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub TaskManager-${Environment}-Dashboard
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${GetTasksFunction}" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${GetTaskFunction}" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${CreateTaskFunction}" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${UpdateTaskFunction}" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${DeleteTaskFunction}" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Lambda Invocations",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${GetTasksFunction}" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${GetTaskFunction}" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${CreateTaskFunction}" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${UpdateTaskFunction}" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${DeleteTaskFunction}" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Lambda Errors",
+                "period": 300
+              }
+            }
+          ]
+        }
+
   # CloudWatch Alarms
   ApiGateway5xxErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ApiGateway5xxErrors
+      AlarmName: !Sub ApiGateway5xxErrors-${Environment}
       AlarmDescription: Alarm if API Gateway has too many 5xx errors
       MetricName: 5XXError
       Namespace: AWS/ApiGateway
@@ -160,7 +275,7 @@ Resources:
   LambdaErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: LambdaErrors
+      AlarmName: !Sub LambdaErrors-${Environment}
       AlarmDescription: Alarm if Lambda functions have too many errors
       MetricName: Errors
       Namespace: AWS/Lambda
@@ -175,6 +290,19 @@ Outputs:
   ApiEndpoint:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  
+  ApiKey:
+    Description: "API Key for authentication"
+    Value: !Ref ApiGatewayApiKey
+  
   TasksTable:
     Description: "DynamoDB Tasks table"
     Value: !Ref TasksTable
+  
+  Environment:
+    Description: "Deployment environment"
+    Value: !Ref Environment
+  
+  DashboardURL:
+    Description: "CloudWatch Dashboard URL"
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${TaskManagerDashboard}"

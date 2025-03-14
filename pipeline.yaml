@@ -19,6 +19,16 @@ Parameters:
     Type: String
     NoEcho: true
     Description: GitHub OAuth token
+    
+  # Adding environment parameter for multi-environment support
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Deployment environment
 
 Resources:
   # Artifact Bucket
@@ -32,6 +42,11 @@ Resources:
           - Id: DeleteOldVersions
             Status: Enabled
             ExpirationInDays: 30
+      # Adding encryption for security best practices
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
   
   # CodeBuild Project
   CodeBuildServiceRole:
@@ -119,11 +134,15 @@ Resources:
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: !Sub '${AWS::StackName}-pipeline'
+      Name: !Sub '${AWS::StackName}-${Environment}-pipeline'
       RoleArn: !GetAtt CodePipelineServiceRole.Arn
       ArtifactStore:
         Type: S3
         Location: !Ref ArtifactBucket
+        # Adding encryption for pipeline artifacts
+        EncryptionKey:
+          Type: KMS
+          Id: alias/aws/s3
       Stages:
         - Name: Source
           Actions:
@@ -138,6 +157,8 @@ Resources:
                 Repo: !Ref GitHubRepo
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
+                # Adding webhook for automatic triggers
+                PollForSourceChanges: false
               OutputArtifacts:
                 - Name: SourceCode
         
@@ -167,11 +188,28 @@ Resources:
               Configuration:
                 ActionMode: CREATE_UPDATE
                 RoleArn: !GetAtt CloudFormationServiceRole.Arn
-                StackName: !Sub '${AWS::StackName}-app'
+                StackName: !Sub '${AWS::StackName}-${Environment}-app'
                 TemplatePath: 'BuildOutput::packaged.yaml'
                 Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                # Adding parameter overrides for environment-specific configuration
+                ParameterOverrides: !Sub '{"Environment": "${Environment}"}'
               InputArtifacts:
                 - Name: BuildOutput
+  
+  # Adding GitHub webhook for automatic pipeline triggering
+  GitHubWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubToken
+      Filters:
+        - JsonPath: "$.ref"
+          MatchEquals: !Sub refs/heads/${GitHubBranch}
+      TargetPipeline: !Ref Pipeline
+      TargetAction: Source
+      TargetPipelineVersion: !GetAtt Pipeline.Version
+      RegisterWithThirdParty: true
   
   # CloudFormation Service Role
   CloudFormationServiceRole:
@@ -191,3 +229,12 @@ Outputs:
   PipelineUrl:
     Description: URL to the CodePipeline console
     Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}
+  
+  # Adding more useful outputs
+  ArtifactBucketName:
+    Description: Name of the S3 bucket used to store build artifacts
+    Value: !Ref ArtifactBucket
+    
+  EnvironmentName:
+    Description: Deployment environment
+    Value: !Ref Environment
