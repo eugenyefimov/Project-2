@@ -1,0 +1,34 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+    commands:
+      - echo Installing dependencies...
+      - npm install
+      - pip install --upgrade aws-sam-cli
+  
+  pre_build:
+    commands:
+      - echo Running tests...
+      - npm test
+  
+  build:
+    commands:
+      - echo Building the SAM application...
+      - sam build
+  
+  post_build:
+    commands:
+      - echo Packaging the SAM application...
+      - sam package --s3-bucket $ARTIFACT_BUCKET --output-template-file packaged.yaml
+
+artifacts:
+  files:
+    - packaged.yaml
+    - template.yaml
+
+cache:
+  paths:
+    - 'node_modules/**/*'
