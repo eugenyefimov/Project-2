@@ -135,6 +135,10 @@ function validateTaskInput(taskData) {
     return `Status must be one of: ${VALID_STATUSES.join(', ')}`;
   }
   
+  if (taskData.priority && !['LOW', 'MEDIUM', 'HIGH'].includes(taskData.priority)) {
+    return 'Priority must be one of: LOW, MEDIUM, HIGH';
+  }
+  
   if (taskData.dueDate && isNaN(Date.parse(taskData.dueDate))) {
     return 'Due date must be a valid date';
   }

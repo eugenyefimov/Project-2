@@ -59,7 +59,7 @@ exports.handler = async (event) => {
     }
     
     // Check if user owns the task (if userId is stored in tasks)
-    if (taskResult.Item.userId && taskResult.Item.userId !== userId) {
+    if (taskResult.Item.userId && taskResult.Item.userId !== userId && !event.requestContext?.authorizer?.claims?.isAdmin) {
       return {
         statusCode: 403,
         headers,
